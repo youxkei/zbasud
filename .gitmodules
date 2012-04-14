@@ -1,0 +1,6 @@
+[submodule "ctpg"]
+	path = ctpg
+	url = git@github.com:youkei/ctpg.git
+[submodule "msgpack-d"]
+	path = msgpack-d
+	url = https://github.com/msgpack/msgpack-d.git
