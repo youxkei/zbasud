@@ -129,7 +129,7 @@ void main(string[] args){
 
     version(Windows){
         immutable string prefix = environment["USERPROFILE"];
-    }else version(Unix){
+    }else version(Posix){
         immutable string prefix = environment["HOME"];
     }else{
         static assert(false);
