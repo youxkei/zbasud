@@ -1,12 +1,12 @@
 module zbasud;
 
-import std.algorithm: startsWith;
+import std.algorithm: startsWith, map;
 import std.array: join;
 import std.datetime: SysTime;
 import std.exception: enforce;
-import std.file: chdir, read, readText, exists, timeLastModified;
-import std.path: dirSeparator;
-import std.process: environment;
+import std.file: chdir, read, write, readText, exists, timeLastModified;
+import std.path: dirSeparator, extension, stripExtension, setExtension;
+import std.process: environment, shell;
 import std.stdio: writeln;
 import std.typecons: Tuple, tuple;
 
@@ -14,44 +14,44 @@ import ctpg;
 import msgpack: pack, unpack;
 
 enum projectFileName = ".vimprojects";
-enum dataFileName = "zbasud.msgpack";
+enum dataFileName = ".zbasud.msgpack";
 
 struct Parsers{
-    static{
-        mixin(generateParsers(q{
-            Data root = project* ss $ >> makeAA >> Data;
+    mixin(generateParsers(q{
+        Data root = ss project*<ss> ss $ | makeAA | Data;
 
-            Tuple!(string, Project) project = ss ((^"=" any)+ >> join) !"=" (((^" " any)+ >> join) !" {\n" imports libs sourceFile* ss !"}" >> Project);
+        Tuple!(string, Project) project = ((^"=" any)+ | join) !"=" (((^" " any)+ | join) !" {\n" ss imports ss libs ss sourceFile*<ss> ss !"}" | Project);
 
-            string[] imports = ss !"#imports" !(" "?) ((^"," ^"\n" any)+ >> join)*<","> !"\n";
+        string[] imports = !"#imports" sss ( (^"," ^"\n" any)+ | join)*<sss "," sss> sss !"\n";
 
-            string[] libs = ss !"#libs" !(" "?) ((^"," ^"\n" any)+ >> join)*<","> !"\n";
+        string[] libs = !"#libs" sss ((^"," ^"\n" any)+ >> join)*<sss "," sss> sss !"\n";
 
-            SourceFile sourceFile = ss (^"}" ^"\n" any)+ !"\n" >> join >> SourceFile;
-        }));
-    }
+        SourceFile sourceFile = (^"}" ^"\n" any)+ !"\n" | join | SourceFile;
+
+        None sss = !((^"\n" parseSpace)*);
+    }));
 
     unittest{
         {
-            auto r = parse!sourceFile(" src/zbasud.d\n");
+            auto r = parse!sourceFile("src/zbasud.d\n");
             assert(r.path == "src/zbasud.d");
         }
         {
-            auto r = parse!imports(" #imports src,ctpg/src,msgpack-d/src\n");
+            auto r = parse!imports("#imports src, ctpg/src,msgpack-d/src\n");
             assert(r == ["src", "ctpg/src", "msgpack-d/src"]);
         }
         {
-            auto r = parse!libs(" #libs ctpg/ctpg.lib,msgpack-d/msgpack.lib\n");
+            auto r = parse!libs("#libs ctpg/ctpg.lib, msgpack-d/msgpack.lib\n");
             assert(r == ["ctpg/ctpg.lib", "msgpack-d/msgpack.lib"]);
         }
         {
-            auto r = parse!project(`
-                zbasud=~/zbasud {
+            auto r = parse!project(
+                `zbasud=~/zbasud {
                     #imports src,ctpg/src,msgpack-d/src
                     #libs ctpg/ctpg.lib,msgpack-d/msgpack.lib
                     src/zbasud.d
-                }
-            `);
+                }`
+            );
             assert(r[0] == "zbasud");
             assert(r[1].path == "~/zbasud");
             assert(r[1].imports == ["src", "ctpg/src", "msgpack-d/src"]);
@@ -73,8 +73,8 @@ struct Parsers{
                 }
 
                 zbasud=~/zbasud {
-                    #imports src,ctpg/src,msgpack-d/src
-                    #libs ctpg/ctpg.lib,msgpack-d/msgpack.lib
+                    #imports src, ctpg/src, msgpack-d/src
+                    #libs ctpg/ctpg.lib, msgpack-d/msgpack.lib
                     src/zbasud.d
                 }
             `);
@@ -113,6 +113,7 @@ struct Project{
 struct SourceFile{
     string path;
     long modified;
+    string objPath;
 }
 
 Value[Key] makeAA(Key, Value)(Tuple!(Key, Value)[] tuples){
@@ -129,8 +130,10 @@ void main(string[] args){
 
     version(Windows){
         immutable string prefix = environment["USERPROFILE"];
+        immutable string objExt = "obj";
     }else version(Posix){
         immutable string prefix = environment["HOME"];
+        immutable string objExt = "o";
     }else{
         static assert(false);
     }
@@ -143,18 +146,36 @@ void main(string[] args){
 
     if(dataFile.exists()){
         unpack(cast(ubyte[])dataFile.read(), data);
+        "DataFileLoadedFromFile".writeln();
     }
 
     immutable long modified = projectFile.timeLastModified().stdTime;
+    bool recreated;
     if(modified > data.modified){
+        recreated = true;
+        "DataFileRecreated".writeln();
         data = projectFile.readText().parse!(Parsers.root)();
+        data.modified = modified;
         foreach(ref project; data.projects.byValue()){
             if(project.path.startsWith('~')){
                 project.path = prefix ~ project.path[1..$];
             }
             foreach(ref file; project.files){
                 file.modified = (project.path ~ dirSeparator ~ file.path).timeLastModified().stdTime;
+                file.objPath = "obj" ~ dirSeparator ~ file.path.stripExtension().setExtension(objExt);
             }
+        }
+        dataFile.write(pack(data));
+    }
+
+    Project project = data.projects[target];
+    immutable string imports = project.imports.map!q{"-I" ~ a ~ " "}().join();
+    chdir(project.path);
+
+    foreach(file; project.files){
+        if(file.path.extension() == ".d" && (!file.objPath.exists() || recreated || file.modified < file.path.timeLastModified().stdTime)){
+            shell("dmd -c -op -odobj " ~ imports ~ file.path);
+            writeln("compiled ", file.path);
         }
     }
 }
