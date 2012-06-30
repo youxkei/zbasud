@@ -1,13 +1,14 @@
+// Written in the D programming language.
 module zbasud;
 
-import std.algorithm: startsWith, map;
+import std.algorithm: startsWith, map, filter;
 import std.array:     join;
 import std.datetime:  SysTime;
 import std.exception: enforce;
 import std.file:      chdir, read, write, readText, exists, timeLastModified;
 import std.getopt:    getopt;
 import std.path:      dirSeparator, extension, stripExtension, setExtension;
-import std.process:   environment, shell;
+import std.process:   environment, system;
 import std.stdio:     writeln;
 import std.typecons:  Tuple, tuple;
 
@@ -126,21 +127,16 @@ Value[Key] makeAA(Key, Value)(Tuple!(Key, Value)[] tuples){
 }
 
 void main(string[] args){
-    bool all;
-    bool release;
-    bool lib;
-    bool run;
+    auto all = false, release = false, lib = false, run = false;
     getopt(args, "all", &all, "release", &release, "lib", &lib, "run", &run);
 
     enforce(args.length >= 2, "too few arguments");
     immutable target = args[1];
 
     version(Windows){
-        immutable prefix = environment["USERPROFILE"];
-        immutable objExt = "obj";
+        immutable prefix = environment["USERPROFILE"], objExt = "obj";
     }else version(Posix){
-        immutable prefix = environment["HOME"];
-        immutable objExt = "o";
+        immutable prefix = environment["HOME"], objExt = "o";
     }else{
         static assert(false);
     }
@@ -149,15 +145,15 @@ void main(string[] args){
     immutable dataFile = prefix ~ dirSeparator ~ dataFileName;
     projectFile.exists().enforce(projectFile ~ " not found");
 
-    Data data;
+    auto data = Data.init;
 
     if(dataFile.exists()){
         unpack(cast(ubyte[])dataFile.read(), data);
         "DataFileLoadedFromFile".writeln();
     }
 
-    immutable long modified = projectFile.timeLastModified().stdTime;
-    bool recreated;
+    immutable modified = projectFile.timeLastModified().stdTime;
+    auto recreated = false;
     if(modified > data.modified){
         recreated = true;
         "DataFileRecreated".writeln();
@@ -180,34 +176,51 @@ void main(string[] args){
         dataFile.write(pack(data));
     }
 
-    Project project = data.projects[target];
-    immutable string imports = project.imports.map!q{"-I" ~ a ~ " "}().join();
+    auto project = data.projects[target];
+    immutable imports = project.imports.map!q{"-I" ~ a}().join(" ");
     chdir(project.path);
 
-    if(all)
+    compile(target, project, imports, release, all, recreated);
+}
+
+void compile(in string target, Project project, in string imports, in bool isRelease, in bool isAll, in bool isForce)
+{
+    if(isAll)
     {
+        auto files = project.files.filter!(file => file.path.extension() == ".d")().map!q{ a.path }().join(" ");
+        if(isRelease)
+        {
+            system("dmd -L-lGL -O -release -inline -of" ~ target ~ " " ~ files);
+        }
+        else
+        {
+            system("dmd -L-lGL -of" ~ target ~ " " ~ files);
+        }
     }
     else
     {
         foreach(file; project.files)
         {
-            if(file.path.extension() == ".d" && (!file.objPath.exists() || recreated || file.modified < file.path.timeLastModified().stdTime))
+            if(file.path.extension() == ".d" && (isForce || !file.objPath.exists() || file.modified < file.path.timeLastModified().stdTime))
             {
-                if(release)
+                if(isRelease)
                 {
-                    shell("dmd -c -op -odobj " ~ imports ~ file.path);
+                    system("dmd -L-lGL -O -release -inline -c -op -odobj " ~ imports ~ " " ~ file.path);
                 }
                 else
                 {
-                    shell("dmd -c -op -odobj " ~ imports ~ file.path);
+                    system("dmd -L-lGL -c -op -odobj " ~ imports ~ " " ~ file.path);
                 }
                 writeln("compiled ", file.path);
             }
         }
-        shell("dmd -L-lGL -of" ~ target ~ " " ~ project.files.map!q{a.objPath}().join(" "));
-        if(run)
+        if(isRelease)
         {
-            shell("./" ~ target);
+            system("dmd -L-lGL -O -release -inline -of" ~ target ~ " " ~ project.files.map!q{a.objPath}().join(" "));
+        }
+        else
+        {
+            system("dmd -L-lGL -of" ~ target ~ " " ~ project.files.map!q{a.objPath}().join(" "));
         }
     }
 }
