@@ -18,22 +18,33 @@ import msgpack: pack, unpack;
 enum projectFileName = ".vimprojects";
 enum dataFileName = ".zbasud.msgpack";
 
-struct Parsers{
-    mixin(generateParsers(q{
+struct Parsers
+{
+    mixin(generateParsers(
+    q{
         Data root = ss project*<ss> ss $ | makeAA | Data;
 
-        Tuple!(string, Project) project = ((^"=" any)+ | join) !"=" (((^" " any)+ | join) !" {\n" ss imports ss libs ss sourceFile*<ss> ss !"}" | Project);
+        Project project = projectName !"=" projectPath !" {\n" ss imports ss libs ss sourceFile*<ss> ss !"}" | Project;
 
-        string[] imports = !"#imports" sss ( (^"," ^"\n" any)+ | join)*<sss "," sss> sss !"\n";
+        string projectName = (^"=" any)+ | join;
 
-        string[] libs = !"#libs" sss ((^"," ^"\n" any)+ >> join)*<sss "," sss> sss !"\n";
+        string projectPath = (^" " any)+ | join;
+
+        string[] imports = !"#imports" sss _import*<sss "," sss> sss !"\n";
+
+        string _import = (^"," ^"\n" any)+ | join;
+
+        string[] libs = !"#libs" sss lib*<sss "," sss> sss !"\n";
+
+        string lib = (^"," ^"\n" any)+ >> join;
 
         SourceFile sourceFile = (^"}" ^"\n" any)+ !"\n" | join | SourceFile;
 
         None sss = !((^"\n" parseSpace)*);
     }));
 
-    unittest{
+    unittest
+    {
         {
             auto r = parse!sourceFile("src/zbasud.d\n");
             assert(r.path == "src/zbasud.d");
@@ -54,11 +65,11 @@ struct Parsers{
                     src/zbasud.d
                 }`
             );
-            assert(r[0] == "zbasud");
-            assert(r[1].path == "~/zbasud");
-            assert(r[1].imports == ["src", "ctpg/src", "msgpack-d/src"]);
-            assert(r[1].libs == ["ctpg/ctpg.lib", "msgpack-d/msgpack.lib"]);
-            assert(r[1].files[0].path == "src/zbasud.d");
+            assert(r.name == "zbasud");
+            assert(r.path == "~/zbasud");
+            assert(r.imports == ["src", "ctpg/src", "msgpack-d/src"]);
+            assert(r.libs == ["ctpg/ctpg.lib", "msgpack-d/msgpack.lib"]);
+            assert(r.files[0].path == "src/zbasud.d");
         }
         {
             Data r = parse!root(`
@@ -100,35 +111,41 @@ struct Parsers{
     }
 }
 
-struct Data{
+struct Data
+{
     Project[string] projects;
     long modified;
 }
 
-struct Project{
+struct Project
+{
+    string name;
     string path;
     string[] imports;
     string[] libs;
     SourceFile[] files;
 }
 
-struct SourceFile{
+struct SourceFile
+{
     string path;
-    long modified;
     string objPath;
+    long modified;
 }
 
-Value[Key] makeAA(Key, Value)(Tuple!(Key, Value)[] tuples){
+Project[string] makeAA(Project[] projects)
+{
     typeof(return) aa;
-    foreach(tuple; tuples){
-        aa[tuple[0]] = tuple[1];
+    foreach(project; projects){
+        aa[project.name] = project;
     }
     return aa;
 }
 
-void main(string[] args){
-    auto all = false, release = false, lib = false, run = false;
-    getopt(args, "all", &all, "release", &release, "lib", &lib, "run", &run);
+void main(string[] args)
+{
+    auto release = false, run = false;
+    getopt(args, "release", &release, "run", &run);
 
     enforce(args.length >= 2, "too few arguments");
     immutable target = args[1];
@@ -177,25 +194,18 @@ void main(string[] args){
     }
 
     auto project = data.projects[target];
-    immutable imports = project.imports.map!q{"-I" ~ a}().join(" ");
     chdir(project.path);
 
-    compile(target, project, imports, release, all, recreated);
+    runCommands(project, release, recreated);
 }
 
-void compile(in string target, Project project, in string imports, in bool isRelease, in bool isAll, in bool isForce)
+void runCommands(Project project, in bool isRelease, in bool isForce)
 {
-    if(isAll)
+    immutable imports = project.imports.map!q{"-I" ~ a}().join(" ");
+    immutable libs = project.libs.join(" ");
+    if(isRelease)
     {
-        auto files = project.files.filter!(file => file.path.extension() == ".d")().map!q{ a.path }().join(" ");
-        if(isRelease)
-        {
-            system("dmd -L-lGL -O -release -inline -of" ~ target ~ " " ~ files);
-        }
-        else
-        {
-            system("dmd -L-lGL -of" ~ target ~ " " ~ files);
-        }
+        system(getReleaseCommand(project.name, project.files, imports, libs));
     }
     else
     {
@@ -203,25 +213,35 @@ void compile(in string target, Project project, in string imports, in bool isRel
         {
             if(file.path.extension() == ".d" && (isForce || !file.objPath.exists() || file.modified < file.path.timeLastModified().stdTime))
             {
-                if(isRelease)
-                {
-                    system("dmd -L-lGL -O -release -inline -c -op -odobj " ~ imports ~ " " ~ file.path);
-                }
-                else
-                {
-                    system("dmd -L-lGL -c -op -odobj " ~ imports ~ " " ~ file.path);
-                }
-                writeln("compiled ", file.path);
+                system(getDebugCompileCommand(file.path, imports));
             }
         }
-        if(isRelease)
-        {
-            system("dmd -L-lGL -O -release -inline -of" ~ target ~ " " ~ project.files.map!q{a.objPath}().join(" "));
-        }
-        else
-        {
-            system("dmd -L-lGL -of" ~ target ~ " " ~ project.files.map!q{a.objPath}().join(" "));
-        }
+        system(getDebugCommand(project.name, project.files, libs));
     }
 }
 
+string getDebugCompileCommand(in string path, in string imports)
+{
+    return "dmd -c -debug -g -unittest -op -odobj " ~ imports ~ " " ~ path;
+}
+
+unittest
+{
+    assert(getDebugCompileCommand("src/hoge.d", "-Isrc -Ifuga/src") == "dmd -c -debug -g -unittest -op -odobj -Isrc -Ifuga/src src/hoge.d");
+    assert(getDebugCompileCommand("src/foo.d", "-Isrc -Ibar/src") == "dmd -c -debug -g -unittest -op -odobj -Isrc -Ibar/src src/foo.d");
+}
+
+string getDebugCommand(string name, SourceFile[] files, string libs)
+{
+    return "dmd -of" ~ name ~ " " ~ libs ~ " " ~ files.filter!(file => file.path.extension() == ".d")().map!(file => file.objPath)().join(" ");
+}
+
+string getReleaseCommand(in string name, SourceFile[] files, in string imports, in string libs)
+{
+    return "dmd -O -release -inline -of" ~ name ~ " "  ~ imports ~ " " ~ libs ~ " " ~ files.filter!(file => file.path.extension() == ".d")().map!(file => file.path)().join(" ");
+}
+
+unittest
+{
+    assert(getReleaseCommand("hoge", [SourceFile("src/hoge.d")], "-Isrc", "a.lib") == "dmd -O -release -inline -ofhoge -Isrc a.lib src/hoge.d");
+}
