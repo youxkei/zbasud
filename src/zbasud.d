@@ -144,8 +144,8 @@ Project[string] makeAA(Project[] projects)
 
 void main(string[] args)
 {
-    auto release = false, run = false;
-    getopt(args, "release", &release, "run", &run);
+    auto release = false, run = false, all = false;
+    getopt(args, "release", &release, "run", &run, "all", &all);
 
     enforce(args.length >= 2, "too few arguments");
     immutable target = args[1];
@@ -196,10 +196,10 @@ void main(string[] args)
     auto project = data.projects[target];
     chdir(project.path);
 
-    runCommands(project, release, recreated);
+    runCommands(project, all, release, recreated);
 }
 
-void runCommands(Project project, in bool isRelease, in bool isForce)
+void runCommands(Project project, in bool isAll, in bool isRelease, in bool isForce)
 {
     immutable imports = project.imports.map!q{"-I" ~ a}().join(" ");
     immutable libs = project.libs.join(" ");
@@ -209,15 +209,27 @@ void runCommands(Project project, in bool isRelease, in bool isForce)
     }
     else
     {
-        foreach(file; project.files)
+        if(isAll)
         {
-            if(file.path.extension() == ".d" && (isForce || !file.objPath.exists() || file.modified < file.path.timeLastModified().stdTime))
-            {
-                system(getDebugCompileCommand(file.path, imports));
-            }
+            system(getDebugAllCommand(project.name, project.files, imports, libs));
         }
-        system(getDebugCommand(project.name, project.files, libs));
+        else
+        {
+            foreach(file; project.files)
+            {
+                if(file.path.extension() == ".d" && (isForce || !file.objPath.exists() || file.modified < file.path.timeLastModified().stdTime))
+                {
+                    system(getDebugCompileCommand(file.path, imports));
+                }
+            }
+            system(getDebugCommand(project.name, project.files, libs));
+        }
     }
+}
+
+string getDebugAllCommand(in string name, SourceFile[] files, string imports, string libs)
+{
+    return "dmd -debug -g -unittest -of" ~ name ~ " "  ~ imports ~ " " ~ libs ~ " " ~ files.filter!(file => file.path.extension() == ".d")().map!(file => file.path)().join(" ");
 }
 
 string getDebugCompileCommand(in string path, in string imports)
