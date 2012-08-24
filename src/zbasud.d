@@ -2,7 +2,7 @@
 module zbasud;
 
 import std.algorithm: startsWith, map, filter;
-import std.array:     join;
+import std.array:     join, replace;
 import std.datetime:  SysTime;
 import std.exception: enforce;
 import std.file:      chdir, read, write, readText, exists, timeLastModified;
@@ -203,15 +203,23 @@ void runCommands(Project project, in bool isAll, in bool isRelease, in bool isFo
 {
     immutable imports = project.imports.map!q{"-I" ~ a}().join(" ");
     immutable libs = project.libs.join(" ");
+    version(Windows)
+    {
+        immutable name = project.name.replace('/', '\\');
+    }
+    else
+    {
+        immutable name = project.name;
+    }
     if(isRelease)
     {
-        system(getReleaseCommand(project.name, project.files, imports, libs));
+        system(getReleaseCommand(name, project.files, imports, libs));
     }
     else
     {
         if(isAll)
         {
-            system(getDebugAllCommand(project.name, project.files, imports, libs));
+            system(getDebugAllCommand(name, project.files, imports, libs));
         }
         else
         {
@@ -222,7 +230,7 @@ void runCommands(Project project, in bool isAll, in bool isRelease, in bool isFo
                     system(getDebugCompileCommand(file.path, imports));
                 }
             }
-            system(getDebugCommand(project.name, project.files, libs));
+            system(getDebugCommand(name, project.files, libs));
         }
     }
 }
