@@ -23,23 +23,23 @@ struct Parsers
     mixin(generateParsers(q{
         @default_skip(^"\n" defaultSkip)
 
-        @skip(defaultSkip) Data root = project* $ >> makeAA >> Data;
+        Data root = !("\n"+) project* !("\n"+) $ >> makeAA >> Data;
 
-        Project project = projectName !"=" projectPath !"{\n" imports libs sourceFile* !"}" >> Project;
+        Project project = projectName !"=" projectPath !"{\n" imports libs sourceFile*<"\n"+> !"}" >> Project;
 
         string projectName = (^"=" any)+ >> join;
 
         string projectPath = (^"{" any)+ >> join;
 
-        string[] imports = !"#imports" _import*<","> !"\n";
+        string[] imports = !"#imports" _import*<","> !("\n"+);
 
         string _import = (^"," ^"\n" any)+ >> join;
 
-        string[] libs = !"#libs" lib*<","> !"\n";
+        string[] libs = !"#libs" lib*<","> !("\n"+);
 
         string lib = (^"," ^"\n" any)+ >> join;
 
-        SourceFile sourceFile = (^"}" ^"\n" any)+ !"\n" >> join >> SourceFile;
+        SourceFile sourceFile = (^"}" ^"\n" any)+ >> join >> SourceFile;
     }));
 
     unittest
@@ -178,7 +178,8 @@ void main(string[] args)
     if(modified > data.modified){
         recreated = true;
         "DataFileRecreated".writeln();
-        data = projectFile.readText().parse!(Parsers.root)().value;
+        auto result = projectFile.readText().parse!(Parsers.root)();
+        data = result.value;
         data.modified = modified;
         foreach(ref project; data.projects.byValue()){
             if(project.path.startsWith('~'))
