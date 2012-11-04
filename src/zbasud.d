@@ -20,42 +20,44 @@ enum dataFileName = ".zbasud.msgpack";
 
 struct Parsers
 {
-    mixin(generateParsers(
-    q{
-        Data root = ss project*<ss> ss $ | makeAA | Data;
+    mixin(generateParsers(q{
+        @default_skip(^"\n" defaultSkip)
 
-        Project project = projectName !"=" projectPath !" {\n" ss imports ss libs ss sourceFile*<ss> ss !"}" | Project;
+        @skip(defaultSkip) Data root = project* $ >> makeAA >> Data;
 
-        string projectName = (^"=" any)+ | join;
+        Project project = projectName !"=" projectPath !"{\n" imports libs sourceFile* !"}" >> Project;
 
-        string projectPath = (^" " any)+ | join;
+        string projectName = (^"=" any)+ >> join;
 
-        string[] imports = !"#imports" sss _import*<sss "," sss> sss !"\n";
+        string projectPath = (^"{" any)+ >> join;
 
-        string _import = (^"," ^"\n" any)+ | join;
+        string[] imports = !"#imports" _import*<","> !"\n";
 
-        string[] libs = !"#libs" sss lib*<sss "," sss> sss !"\n";
+        string _import = (^"," ^"\n" any)+ >> join;
+
+        string[] libs = !"#libs" lib*<","> !"\n";
 
         string lib = (^"," ^"\n" any)+ >> join;
 
-        SourceFile sourceFile = (^"}" ^"\n" any)+ !"\n" | join | SourceFile;
-
-        None sss = !((^"\n" parseSpace)*);
+        SourceFile sourceFile = (^"}" ^"\n" any)+ !"\n" >> join >> SourceFile;
     }));
 
     unittest
     {
         {
             auto r = parse!sourceFile("src/zbasud.d\n");
-            assert(r.path == "src/zbasud.d");
+            assert(r.match);
+            assert(r.value.path == "src/zbasud.d");
         }
         {
             auto r = parse!imports("#imports src, ctpg/src,msgpack-d/src\n");
-            assert(r == ["src", "ctpg/src", "msgpack-d/src"]);
+            assert(r.match);
+            assert(r.value == ["src", "ctpg/src", "msgpack-d/src"]);
         }
         {
             auto r = parse!libs("#libs ctpg/ctpg.lib, msgpack-d/msgpack.lib\n");
-            assert(r == ["ctpg/ctpg.lib", "msgpack-d/msgpack.lib"]);
+            assert(r.match);
+            assert(r.value == ["ctpg/ctpg.lib", "msgpack-d/msgpack.lib"]);
         }
         {
             auto r = parse!project(
@@ -65,14 +67,15 @@ struct Parsers
                     src/zbasud.d
                 }`
             );
-            assert(r.name == "zbasud");
-            assert(r.path == "~/zbasud");
-            assert(r.imports == ["src", "ctpg/src", "msgpack-d/src"]);
-            assert(r.libs == ["ctpg/ctpg.lib", "msgpack-d/msgpack.lib"]);
-            assert(r.files[0].path == "src/zbasud.d");
+            assert(r.match);
+            assert(r.value.name == "zbasud");
+            assert(r.value.path == "~/zbasud");
+            assert(r.value.imports == ["src", "ctpg/src", "msgpack-d/src"]);
+            assert(r.value.libs == ["ctpg/ctpg.lib", "msgpack-d/msgpack.lib"]);
+            assert(r.value.files[0].path == "src/zbasud.d");
         }
         {
-            Data r = parse!root(`
+            auto r = parse!root(`
                 ctpg=~/ctpg {
                     #imports src
                     #libs
@@ -91,22 +94,23 @@ struct Parsers
                     src/zbasud.d
                 }
             `);
-            assert(r.projects.length == 3);
-            assert(r.projects["ctpg"].path == "~/ctpg");
-            assert(r.projects["ctpg"].imports == ["src"]);
-            assert(r.projects["ctpg"].libs.length == 0);
-            assert(r.projects["ctpg"].files.length == 1);
-            assert(r.projects["ctpg"].files[0].path == "src/ctpg.d");
-            assert(r.projects["ciprad"].path == "~/ciprad");
-            assert(r.projects["ciprad"].imports == ["src"]);
-            assert(r.projects["ciprad"].libs.length == 0);
-            assert(r.projects["ciprad"].files.length == 1);
-            assert(r.projects["ciprad"].files[0].path == "src/ciprad.d");
-            assert(r.projects["zbasud"].path == "~/zbasud");
-            assert(r.projects["zbasud"].imports == ["src", "ctpg/src", "msgpack-d/src"]);
-            assert(r.projects["zbasud"].libs == ["ctpg/ctpg.lib", "msgpack-d/msgpack.lib"]);
-            assert(r.projects["zbasud"].files.length == 1);
-            assert(r.projects["zbasud"].files[0].path == "src/zbasud.d");
+            assert(r.match);
+            assert(r.value.projects.length == 3);
+            assert(r.value.projects["ctpg"].path == "~/ctpg");
+            assert(r.value.projects["ctpg"].imports == ["src"]);
+            assert(r.value.projects["ctpg"].libs.length == 0);
+            assert(r.value.projects["ctpg"].files.length == 1);
+            assert(r.value.projects["ctpg"].files[0].path == "src/ctpg.d");
+            assert(r.value.projects["ciprad"].path == "~/ciprad");
+            assert(r.value.projects["ciprad"].imports == ["src"]);
+            assert(r.value.projects["ciprad"].libs.length == 0);
+            assert(r.value.projects["ciprad"].files.length == 1);
+            assert(r.value.projects["ciprad"].files[0].path == "src/ciprad.d");
+            assert(r.value.projects["zbasud"].path == "~/zbasud");
+            assert(r.value.projects["zbasud"].imports == ["src", "ctpg/src", "msgpack-d/src"]);
+            assert(r.value.projects["zbasud"].libs == ["ctpg/ctpg.lib", "msgpack-d/msgpack.lib"]);
+            assert(r.value.projects["zbasud"].files.length == 1);
+            assert(r.value.projects["zbasud"].files[0].path == "src/zbasud.d");
         }
     }
 }
@@ -174,7 +178,7 @@ void main(string[] args)
     if(modified > data.modified){
         recreated = true;
         "DataFileRecreated".writeln();
-        data = projectFile.readText().parse!(Parsers.root)();
+        data = projectFile.readText().parse!(Parsers.root)().value;
         data.modified = modified;
         foreach(ref project; data.projects.byValue()){
             if(project.path.startsWith('~'))
