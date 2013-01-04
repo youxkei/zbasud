@@ -21,15 +21,17 @@ enum dataFileName = ".zbasud.msgpack";
 struct Parsers
 {
     mixin(generateParsers(q{
-        @default_skip(^"\n" defaultSkip)
+        @default_skip(defaultSkip)
 
-        Data root = !("\n"+) project* !("\n"+) $ >> makeAA >> Data;
+        Data root = project* $ >> makeAA >> Data;
 
-        Project project = projectName !"=" projectPath !"{\n" imports libs sourceFile*<"\n"+> !"}" >> Project;
+        Project project = projectName !"=" projectPath !"{\n" imports libs sourceFile* !"}" >> Project;
 
         string projectName = (^"=" any)+ >> join;
 
         string projectPath = (^"{" any)+ >> join;
+
+        @default_skip(^"\n" defaultSkip)
 
         string[] imports = !"#imports" _import*<","> !("\n"+);
 
